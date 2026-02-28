@@ -1,0 +1,4 @@
+numpy
+psychrolib
+PySide6
+matplotlib
