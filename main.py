@@ -48,6 +48,17 @@ class PsychroApp(QMainWindow):
         input_group.setLayout(input_layout)
         sidebar.addWidget(input_group)
 
+        # Groupe Batterie Froide
+        bf_group = QGroupBox("Batterie Froide")
+        bf_layout = QVBoxLayout()
+        self.tbf_in = self.create_input(bf_layout, "Température BF (°C) :", -20, 50, 5)
+        self.eff_bf_in = self.create_input(bf_layout, "Efficacité BF (%) :", 0, 100, 80)
+        btn_calculer_bf = QPushButton("Calculer BF")
+        btn_calculer_bf.clicked.connect(self.calculer_batterie_froide)
+        bf_layout.addWidget(btn_calculer_bf)
+        bf_group.setLayout(bf_layout)
+        sidebar.addWidget(bf_group)
+
         # Zone de Log / Résultats
         self.log_box = QTextEdit()
         self.log_box.setReadOnly(True)
@@ -87,6 +98,7 @@ class PsychroApp(QMainWindow):
         self.temp_in.valueChanged.connect(self.update_from_inputs)
         self.hr_in.valueChanged.connect(self.update_from_inputs)
         self.canvas.mpl_connect('button_press_event', self.on_click)
+        self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
 
     def create_input(self, layout, label, mini, maxi, default):
         layout.addWidget(QLabel(label))
@@ -148,14 +160,23 @@ class PsychroApp(QMainWindow):
 
         # 5. Lignes d'Enthalpie constante (Diagonales)
         # Formule : w = (h - Cpa*T) / (Hfg + Cpw*T)
-        for h in range(0, 101, 20):
+        for h in range(-10, 135, 5):
             h_w = [(h - 1.006 * t) / (2501 + 1.86 * t) for t in temps]
             # On filtre pour rester sous la saturation
             valid_t = [t for i, t in enumerate(temps) if 0 <= h_w[i] <= w_sat[i]]
             valid_w = [w for i, w in enumerate(h_w) if 0 <= h_w[i] <= w_sat[i]]
             if valid_w:
                 self.ax.plot(valid_t, valid_w, 'g--', alpha=0.2)
-                self.ax.text(valid_t[0], valid_w[0], f"{h}", color='green', fontsize=8)
+                if h <= 100:
+                    # Placer la légende de l'enthalpie à la fin de la courbe (vers la droite / le bas)
+                    # On utilise valid_t[-1] et valid_w[-1] avec un alignement adapté
+                    t_end = valid_t[-1]
+                    w_end = valid_w[-1]
+                    # Si la ligne sort par la droite (T=50), on aligne à droite.
+                    # Sinon la ligne sort par le haut (saturation) -> devrait pas arriver souvent,
+                    # ou sort par le bas (w=0) => T = h/1.006. Le dernier point valide est proche de w=0.
+                    self.ax.text(t_end, w_end, f" {h}", color='green', fontsize=8,
+                                 verticalalignment='bottom', horizontalalignment='left' if t_end < 49 else 'right')
 
         # 6. Lignes de volume spécifique constant (m³/kg)
         w_vals = np.linspace(0.001, 0.028, 80)
@@ -199,6 +220,12 @@ class PsychroApp(QMainWindow):
         self.ax.legend(handles=legend_handles, loc='center left', fontsize=8,
                        framealpha=0.95, edgecolor='gray')
 
+        # Ajout du conteneur de texte pour le survol de souris
+        self.hover_text = self.ax.text(0.02, 0.98, "", transform=self.ax.transAxes, 
+                                       verticalalignment='top', fontsize=9,
+                                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'))
+        self.hover_text.set_visible(False)
+
         self.canvas.draw()
 
     def update_from_inputs(self):
@@ -217,6 +244,27 @@ class PsychroApp(QMainWindow):
             self.current_marker.remove()
         self.current_marker = self.ax.scatter(t, w, color='blue', s=80, edgecolors='white', zorder=5)
         self.canvas.draw()
+
+    def on_mouse_move(self, event):
+        if hasattr(self, 'hover_text'):
+            if event.inaxes:
+                t, w = event.xdata, event.ydata
+                # Vérification : Seulement sous la courbe de saturation et limites physiquement vraisemblables
+                if -15 <= t <= 55 and w >= 0:
+                    sat_w = psychrolib.GetSatHumRatio(t, self.p_atm)
+                    if w <= sat_w:
+                        h = psychrolib.GetMoistAirEnthalpy(t, w)
+                        p_hpa = self.p_atm / 100.0
+                        info = f"Patm = {p_hpa:.1f} hPa\nEnthalpie = {h/1000:.2f} kJ/kg\nT = {t:.1f}°C\nW = {w*1000:.2f} g/kg"
+                        self.hover_text.set_text(info)
+                        self.hover_text.set_visible(True)
+                        self.canvas.draw_idle()
+                        return
+            
+            # En dehors de la zone valide ou hors du plot
+            if self.hover_text.get_visible():
+                self.hover_text.set_visible(False)
+                self.canvas.draw_idle()
 
     def on_click(self, event):
         if event.inaxes:
@@ -240,13 +288,60 @@ class PsychroApp(QMainWindow):
         
         # Tracé de la ligne de processus
         line, = self.ax.plot([p1[0], p2[0]], [p1[1], p2[1]], 'orange', lw=2, linestyle='-')
-        self.orange_artists.append(line)
+        # Ajout des lettres A et B au-dessus des points (décalage vertical pour lisibilité)
+        off_y = 0.0005 
+        text_a = self.ax.text(p1[0], p1[1] + off_y, 'A', color='black', fontsize=10, fontweight='bold', ha='center')
+        text_b = self.ax.text(p2[0], p2[1] + off_y, 'B', color='black', fontsize=10, fontweight='bold', ha='center')
+        self.orange_artists.extend([line, text_a, text_b])
         
         msg = (f"NOUVEAU PROCESSUS :\n"
                f"Point A -> Point B\n"
                f"Δh = {delta_h:.2f} kJ/kg d'air sec\n"
                f"Puissance pour 1 kg/s : {delta_h:.2f} kW")
         self.log_box.append("\n" + "-"*20 + "\n" + msg)
+
+    def calculer_batterie_froide(self):
+        t_A = self.temp_in.value()
+        hr_A = self.hr_in.value()
+        t_bf = self.tbf_in.value()
+        eff = self.eff_bf_in.value() / 100.0
+        
+        try:
+            w_A = psychrolib.GetHumRatioFromRelHum(t_A, hr_A / 100.0, self.p_atm)
+            h_A = psychrolib.GetMoistAirEnthalpy(t_A, w_A)
+            
+            # Point batterie à l'état de saturation
+            w_bf = psychrolib.GetSatHumRatio(t_bf, self.p_atm)
+            
+            # Point B : Sortie de batterie (bypass factor)
+            t_B = t_A * (1 - eff) + t_bf * eff
+            w_B = w_A * (1 - eff) + w_bf * eff
+            
+            # Limiter W_B à la saturation s'il dépasse physiquement (sécurité)
+            w_sat_B = psychrolib.GetSatHumRatio(t_B, self.p_atm)
+            if w_B > w_sat_B:
+                w_B = w_sat_B
+                
+            h_B = psychrolib.GetMoistAirEnthalpy(t_B, w_B)
+            
+            delta_h = (h_B - h_A) / 1000.0 # kJ/kg
+            delta_w = (w_B - w_A) * 1000.0 # g/kg
+            
+            # Tracé
+            line, = self.ax.plot([t_A, t_B], [w_A, w_B], 'cyan', lw=2, linestyle='-')
+            sc = self.ax.scatter(t_B, w_B, color='cyan', s=60, edgecolors='black', zorder=6)
+            self.orange_artists.extend([line, sc])
+            
+            msg = (f"BATTERIE FROIDE :\n"
+                   f"Entrée : T={t_A:.1f}°C, HR={hr_A:.1f}%\n"
+                   f"Sortie : T={t_B:.1f}°C\n"
+                   f"Δh = {delta_h:.2f} kJ/kg d'air sec\n"
+                   f"ΔW = {delta_w:.2f} g/kg d'air sec")
+            self.log_box.append("\n" + "-"*20 + "\n" + msg)
+            self.canvas.draw()
+            
+        except Exception as e:
+            self.log_box.append(f"\nErreur Batterie Froide : paramètres hors limites.")
 
     def effacer_points(self):
         """Réinitialise les points, efface les processus tracés et la zone de log."""
