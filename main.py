@@ -160,23 +160,20 @@ class PsychroApp(QMainWindow):
 
         # 5. Lignes d'Enthalpie constante (Diagonales)
         # Formule : w = (h - Cpa*T) / (Hfg + Cpw*T)
-        for h in range(-10, 135, 5):
+        for h in range(-10, 130, 5):
             h_w = [(h - 1.006 * t) / (2501 + 1.86 * t) for t in temps]
             # On filtre pour rester sous la saturation
             valid_t = [t for i, t in enumerate(temps) if 0 <= h_w[i] <= w_sat[i]]
             valid_w = [w for i, w in enumerate(h_w) if 0 <= h_w[i] <= w_sat[i]]
             if valid_w:
                 self.ax.plot(valid_t, valid_w, 'g--', alpha=0.2)
-                if h <= 100:
-                    # Placer la légende de l'enthalpie à la fin de la courbe (vers la droite / le bas)
-                    # On utilise valid_t[-1] et valid_w[-1] avec un alignement adapté
-                    t_end = valid_t[-1]
-                    w_end = valid_w[-1]
-                    # Si la ligne sort par la droite (T=50), on aligne à droite.
-                    # Sinon la ligne sort par le haut (saturation) -> devrait pas arriver souvent,
-                    # ou sort par le bas (w=0) => T = h/1.006. Le dernier point valide est proche de w=0.
-                    self.ax.text(t_end, w_end, f" {h}", color='green', fontsize=8,
-                                 verticalalignment='bottom', horizontalalignment='left' if t_end < 49 else 'right')
+                # Placer la légende de l'enthalpie à la fin de la courbe (vers la droite / le bas)
+                t_end = valid_t[-1]
+                w_end = valid_w[-1]
+                # Aligner selon la position de sortie
+                ha = 'left' if t_end < 49 else 'right'
+                self.ax.text(t_end, w_end, f" {h}", color='green', fontsize=8,
+                             verticalalignment='bottom', horizontalalignment=ha)
 
         # 6. Lignes de volume spécifique constant (m³/kg)
         w_vals = np.linspace(0.001, 0.028, 80)
